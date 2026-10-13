@@ -1,0 +1,9 @@
+routes:
+  - id: example-service
+    prefix: /example
+    upstream: http://127.0.0.1:4000
+    rewritePrefix: /
+    timeoutMs: 5000
+    rateLimit:
+      max: 100
+      timeWindow: 60000
