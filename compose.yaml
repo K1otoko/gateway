@@ -2,7 +2,7 @@ name: gateway
 
 services:
   gateway:
-    image: "${GATEWAY_IMAGE:-ghcr.io/k1otoko/gateway}:${IMAGE_TAG:-latest}"
+    image: "${GATEWAY_IMAGE:?GATEWAY_IMAGE is required}:${IMAGE_TAG:-latest}"
     restart: unless-stopped
     init: true
     environment:

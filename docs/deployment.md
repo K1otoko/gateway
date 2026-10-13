@@ -4,7 +4,7 @@
 
 1. 推送代码到 `master`。
 2. GitHub Actions 执行类型检查、测试和构建。
-3. Actions 构建 Docker 镜像并推送到 GitHub Container Registry（GHCR）。
+3. Actions 构建 Docker 镜像并推送到阿里云容器镜像服务（ACR）。
 4. Actions 通过 SSH 登录服务器，上传 `compose.yaml`。
 5. 服务器拉取当前 commit 对应的镜像并启动容器。
 
@@ -31,8 +31,8 @@
 - Docker Compose v2.20 或更高版本。工作流使用了 `docker compose up --wait`。
 - 部署用户可以通过 SSH 登录。
 - 部署用户有权限运行 Docker。
-- 服务器能访问 `ghcr.io`。
-- 若镜像是私有的，服务器已登录 GHCR。
+- ACR 中已经创建命名空间和 `gateway` 镜像仓库。
+- 服务器和 GitHub Actions 使用的 ACR 账号都具有镜像访问权限。
 
 在服务器执行：
 
@@ -206,32 +206,28 @@ ssh-keygen -lf gateway-known-hosts
 
 通过云服务商控制台或服务器控制台核对指纹，不能只依赖 `ssh-keyscan` 的结果。`gateway-known-hosts` 的完整内容将配置为 GitHub Secret。
 
-## 八、配置 GHCR
+## 八、配置阿里云 ACR
 
-工作流通过仓库自带的 `GITHUB_TOKEN` 推送：
+本项目使用以下 ACR 个人版镜像仓库：
 
 ```text
-ghcr.io/k1otoko/gateway:<commit-sha>
-ghcr.io/k1otoko/gateway:latest
+crpi-aesb6g2i9nvevyft.cn-beijing.personal.cr.aliyuncs.com/k1otoko/gateway
 ```
 
-每次部署实际使用不可变的 commit SHA 标签，`latest` 只用于人工查看或临时运行。
-
-首次执行后，可以在 GitHub 仓库或个人主页的 Packages 页面调整镜像可见性。
-
-### 私有镜像
-
-如果镜像保持私有，需要创建至少具有 `read:packages` 权限的 GitHub Personal Access Token，然后在服务器登录：
+在阿里云 ACR 控制台的“访问凭证”页面获取准确的登录用户名，并设置独立的 Registry 固定密码。该密码不是阿里云控制台登录密码。
 
 ```bash
-echo 'YOUR_GHCR_TOKEN' | docker login ghcr.io -u K1otoko --password-stdin
+read -rsp "ACR password: " ACR_PASSWORD
+echo
+printf '%s' "$ACR_PASSWORD" |
+  docker login \
+    --username YOUR_ACR_USERNAME \
+    --password-stdin \
+    crpi-aesb6g2i9nvevyft.cn-beijing.personal.cr.aliyuncs.com
+unset ACR_PASSWORD
 ```
 
-组织启用了 SSO 时，还需要为 Token 授权对应组织。登录信息会保存在部署用户的 Docker 配置中。
-
-### 公开镜像
-
-公开镜像通常不需要服务器登录 GHCR，但仍建议先手动执行一次 `docker pull` 验证服务器网络。
+成功时会显示 `Login Succeeded`。每次部署使用 commit SHA 标签，同时发布 `latest` 标签用于人工查看。
 
 ## 九、配置 GitHub Environment 和 Secrets
 
@@ -245,10 +241,18 @@ GitHub repository
   -> production
 ```
 
+在 `production` Environment 的 Variables 中添加：
+
+| Variable | 值 |
+| --- | --- |
+| `ACR_IMAGE` | `crpi-aesb6g2i9nvevyft.cn-beijing.personal.cr.aliyuncs.com/k1otoko/gateway` |
+
 建议将以下 Secrets 配置在 `production` Environment 中：
 
 | Secret | 示例 | 说明 |
 | --- | --- | --- |
+| `ACR_USERNAME` | ACR 访问凭证页面显示的用户名 | 镜像仓库登录用户名 |
+| `ACR_PASSWORD` | ACR Registry 固定密码 | 不是阿里云控制台密码 |
 | `DEPLOY_HOST` | `gateway.example.com` | 不包含 `https://` |
 | `DEPLOY_PORT` | `22` | SSH 端口，必须填写 |
 | `DEPLOY_USER` | `deploy` | 部署用户 |
@@ -258,19 +262,7 @@ GitHub repository
 
 Environment 可以增加 Required reviewers，使生产发布必须人工批准。
 
-同时检查仓库设置：
-
-```text
-Settings -> Actions -> General -> Workflow permissions
-```
-
-组织或仓库策略必须允许工作流写入 Packages。工作流本身已经声明：
-
-```yaml
-permissions:
-  contents: read
-  packages: write
-```
+工作流会从 `ACR_IMAGE` 自动解析 ACR 登录域名。不要在变量中添加 `https://` 或镜像标签。
 
 ## 十、配置域名、HTTPS 和防火墙
 
@@ -342,7 +334,7 @@ GitHub Actions 会依次：
 
 1. 安装锁定版本的依赖。
 2. 执行类型检查、测试和 TypeScript 构建。
-3. 构建并推送 GHCR 镜像。
+3. 登录 ACR，构建并推送镜像。
 4. 创建服务器部署目录并上传 `compose.yaml`。
 5. 写入只包含镜像名称和 commit SHA 的 `.image.env`。
 6. 校验 Compose 配置、拉取镜像并等待健康检查通过。
@@ -385,13 +377,13 @@ docker compose --env-file .env --env-file .image.env up \
   gateway
 ```
 
-需要恢复到更早版本时，在 GitHub Actions 历史或 GHCR Packages 页面找到对应的 commit SHA，然后执行：
+需要恢复到更早版本时，在 GitHub Actions 历史或 ACR 镜像仓库中找到对应的 commit SHA，然后执行：
 
 ```bash
 cd /project/gateway
 
 cat > .image.env <<'EOF'
-GATEWAY_IMAGE=ghcr.io/k1otoko/gateway
+GATEWAY_IMAGE=crpi-aesb6g2i9nvevyft.cn-beijing.personal.cr.aliyuncs.com/k1otoko/gateway
 IMAGE_TAG=REPLACE_WITH_COMMIT_SHA
 EOF
 
@@ -413,11 +405,11 @@ docker compose --env-file .env --env-file .image.env up \
 
 ### `pull access denied`
 
-镜像是私有的，但服务器没有登录 GHCR，或 Token 缺少 `read:packages` 权限。
+服务器没有登录对应的 ACR 域名，Registry 密码错误，或者账号没有该镜像仓库的读取权限。
 
 ### `Missing GitHub secret`
 
-工作流要求六个部署 Secret 全部存在。检查它们是否配置在名为 `production` 的 Environment，名称和大小写必须完全一致。
+检查八个 Secrets 和 `ACR_IMAGE` Variable 是否配置在名为 `production` 的 Environment，名称和大小写必须完全一致。
 
 ### 容器一直显示 `unhealthy`
 

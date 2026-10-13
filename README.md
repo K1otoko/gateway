@@ -87,8 +87,8 @@ NODE_ENV=production pnpm start
 ## Docker deployment
 
 The repository includes a production Docker image, Docker Compose
-configuration, and a GitHub Actions workflow that publishes to GHCR and
-deploys over SSH.
+configuration, and a GitHub Actions workflow that publishes to Alibaba Cloud
+Container Registry (ACR) and deploys over SSH.
 
 See [docs/deployment.md](docs/deployment.md) for the complete server and GitHub
 configuration guide.
