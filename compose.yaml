@@ -1,0 +1,50 @@
+name: gateway
+
+services:
+  gateway:
+    image: "${GATEWAY_IMAGE:-ghcr.io/k1otoko/gateway}:${IMAGE_TAG:-latest}"
+    restart: unless-stopped
+    init: true
+    environment:
+      NODE_ENV: production
+      HOST: 0.0.0.0
+      PORT: 3000
+      LOG_LEVEL: "${LOG_LEVEL:-info}"
+      BODY_LIMIT: "${BODY_LIMIT:-1048576}"
+      TRUST_PROXY: "${TRUST_PROXY:-false}"
+      ROUTES_CONFIG_FILE: /app/config/routes.yaml
+    ports:
+      - "${GATEWAY_BIND_ADDRESS:-127.0.0.1}:${GATEWAY_PORT:-3000}:3000"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - "${ROUTES_CONFIG_PATH:-./config/routes.yaml}:/app/config/routes.yaml:ro"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:' + (process.env.PORT || '3000') + '/health/ready').then((response) => { if (!response.ok) process.exit(1); }).catch(() => process.exit(1));",
+        ]
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    stop_grace_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+    networks:
+      - gateway
+
+networks:
+  gateway:
+    name: "${GATEWAY_NETWORK:-gateway}"

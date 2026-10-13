@@ -2,5 +2,7 @@ node_modules/
 dist/
 coverage/
 .env
+.image.env
+.deploy-keys/
 *.log
 .DS_Store
