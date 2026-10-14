@@ -13,6 +13,10 @@ services:
       BODY_LIMIT: "${BODY_LIMIT:-1048576}"
       TRUST_PROXY: "${TRUST_PROXY:-false}"
       ROUTES_CONFIG_FILE: /app/config/routes.yaml
+      OIDC_ISSUER: "${OIDC_ISSUER:?OIDC_ISSUER is required}"
+      OIDC_JWKS_URI: "${OIDC_JWKS_URI:?OIDC_JWKS_URI is required}"
+      OIDC_AUDIENCE: "${OIDC_AUDIENCE:-urn:sso:api}"
+      AUTH_CLOCK_TOLERANCE_SECONDS: "${AUTH_CLOCK_TOLERANCE_SECONDS:-60}"
     ports:
       - "${GATEWAY_BIND_ADDRESS:-127.0.0.1}:${GATEWAY_PORT:-3000}:3000"
     extra_hosts:

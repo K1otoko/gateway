@@ -19,9 +19,24 @@ The default configuration exposes:
 
 - `GET /health/live` for liveness
 - `GET /health/ready` for readiness
-- `/example/*` proxied to `http://127.0.0.1:4000/*`
+- authenticated `/api/gateway/example/*` requests proxied to
+  `http://127.0.0.1:4000/*`
 
-The example upstream does not need to be running for the gateway to start.
+The example upstream and SSO server do not need to be running for the gateway
+to start. The gateway fetches signing keys when the first authenticated request
+arrives.
+
+## Authentication
+
+Protected routes accept the SSO access token as
+`Authorization: Bearer <token>`. The gateway verifies the ES256 signature,
+`typ=at+jwt`, issuer, audience, expiration, `token_use=user`, subject, and role.
+It then removes all client-supplied `X-User-*` headers and injects trusted
+`X-User-Id` and `X-User-Role` headers for the upstream.
+
+Authorization failures return `401 invalid_token`; valid users below a route's
+minimum role return `403 insufficient_role`. Role levels are
+`super > admin > user`.
 
 ## Route configuration
 
@@ -30,10 +45,13 @@ Routes are loaded from `config/routes.yaml` by default:
 ```yaml
 routes:
   - id: user-service
-    prefix: /api/users
+    prefix: /api/gateway/users
     upstream: http://127.0.0.1:4000
     rewritePrefix: /users
     timeoutMs: 5000
+    auth:
+      mode: required
+      minRole: user
     rateLimit:
       max: 100
       timeWindow: 60000
@@ -46,11 +64,14 @@ routes:
 | `upstream` | yes | HTTP or HTTPS origin without a path or credentials |
 | `rewritePrefix` | no | Prefix sent to the upstream; defaults to an empty prefix |
 | `timeoutMs` | no | Upstream timeout in milliseconds; defaults to `10000` |
+| `auth` | yes | Explicit route policy: `public`, or `required` with `minRole` |
 | `rateLimit` | no | Per-route request limit |
-| `websocket` | no | Enables WebSocket proxying; defaults to `false` |
+| `websocket` | no | Enables WebSocket proxying for public routes; defaults to `false` |
 
 Route changes take effect after a restart. Only configured upstream origins can
 receive proxied requests; clients cannot provide an arbitrary target URL.
+Authenticated WebSocket routes are rejected because HTTP authorization hooks do
+not protect upgrade requests.
 
 ## Environment
 
@@ -63,8 +84,14 @@ receive proxied requests; clients cannot provide an arbitrary target URL.
 | `BODY_LIMIT` | `1048576` | Maximum request body size in bytes |
 | `TRUST_PROXY` | `false` | Trust incoming proxy headers |
 | `ROUTES_CONFIG_FILE` | `config/routes.yaml` | Route configuration path |
+| `OIDC_ISSUER` | `http://127.0.0.1:4000/api/sso/oidc` | Exact access token issuer |
+| `OIDC_JWKS_URI` | `{local issuer}/jwks` | JWKS URL; may use an internal address |
+| `OIDC_AUDIENCE` | `urn:sso:api` | Required access token audience |
+| `AUTH_CLOCK_TOLERANCE_SECONDS` | `60` | JWT clock skew tolerance, from 0 to 300 |
 
 Enable `TRUST_PROXY` only when the gateway is behind a trusted reverse proxy.
+In production, set `OIDC_ISSUER` to the public issuer in the token and use
+`OIDC_JWKS_URI` for the reachable internal JWKS endpoint.
 
 ## Commands
 

@@ -1,9 +1,12 @@
 routes:
   - id: example-service
-    prefix: /example
+    prefix: /api/gateway/example
     upstream: http://127.0.0.1:4000
     rewritePrefix: /
     timeoutMs: 5000
+    auth:
+      mode: required
+      minRole: user
     rateLimit:
       max: 100
       timeWindow: 60000

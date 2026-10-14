@@ -5,6 +5,11 @@ import Fastify, {
   type FastifyServerOptions,
 } from 'fastify';
 
+import { registerAuthenticationContext } from './auth/authorize.js';
+import {
+  createRemoteAccessTokenVerifier,
+  type AccessTokenVerifier,
+} from './auth/token-verifier.js';
 import { registerEnvironment } from './config/env.js';
 import {
   loadGatewayConfig,
@@ -17,6 +22,7 @@ import { registerSecurityPlugins } from './plugins/security.js';
 import { registerHealthRoutes } from './routes/health.js';
 
 export interface BuildAppOptions {
+  accessTokenVerifier?: AccessTokenVerifier;
   gatewayConfig?: GatewayConfig;
   logger?: boolean;
 }
@@ -66,10 +72,23 @@ export async function buildApp(
   const gatewayConfig =
     options.gatewayConfig ??
     (await loadGatewayConfig(app.config.ROUTES_CONFIG_FILE));
+  const hasProtectedRoutes = gatewayConfig.routes.some(
+    (route) => route.auth.mode === 'required',
+  );
+  const accessTokenVerifier =
+    options.accessTokenVerifier ??
+    (hasProtectedRoutes
+      ? createRemoteAccessTokenVerifier(app.config)
+      : undefined);
 
   await registerSecurityPlugins(app);
+  registerAuthenticationContext(app);
+  app.addHook('onRequest', (request, reply, done) => {
+    reply.header('x-request-id', request.id);
+    done();
+  });
   registerHealthRoutes(app, gatewayConfig);
-  await registerProxies(app, gatewayConfig);
+  await registerProxies(app, gatewayConfig, accessTokenVerifier);
 
   return app;
 }

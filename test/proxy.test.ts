@@ -84,6 +84,9 @@ describe('gateway', () => {
             id: 'unavailable',
             prefix: '/unavailable',
             upstream: `http://127.0.0.1:${upstreamPort}`,
+            auth: {
+              mode: 'public',
+            },
           },
         ],
       },
@@ -128,6 +131,9 @@ describe('gateway', () => {
             upstream: `http://127.0.0.1:${upstreamPort}`,
             rewritePrefix: '/v1',
             timeoutMs: 1000,
+            auth: {
+              mode: 'public',
+            },
             rateLimit: {
               max: 1,
               timeWindow: 60_000,

@@ -13,6 +13,26 @@ const RateLimitSchema = Type.Object(
   { additionalProperties: false },
 );
 
+const RouteAuthSchema = Type.Union([
+  Type.Object(
+    {
+      mode: Type.Literal('public'),
+    },
+    { additionalProperties: false },
+  ),
+  Type.Object(
+    {
+      mode: Type.Literal('required'),
+      minRole: Type.Union([
+        Type.Literal('super'),
+        Type.Literal('admin'),
+        Type.Literal('user'),
+      ]),
+    },
+    { additionalProperties: false },
+  ),
+]);
+
 const GatewayRouteSchema = Type.Object(
   {
     id: Type.String({
@@ -36,6 +56,7 @@ const GatewayRouteSchema = Type.Object(
         maximum: 300_000,
       }),
     ),
+    auth: RouteAuthSchema,
     rateLimit: Type.Optional(RateLimitSchema),
     websocket: Type.Optional(Type.Boolean()),
   },
@@ -53,6 +74,7 @@ const gatewayConfigValidator = TypeCompiler.Compile(GatewayConfigSchema);
 
 export type GatewayConfig = Static<typeof GatewayConfigSchema>;
 export type GatewayRoute = Static<typeof GatewayRouteSchema>;
+export type RouteAuth = Static<typeof RouteAuthSchema>;
 
 export class GatewayConfigurationError extends Error {
   override readonly name = 'GatewayConfigurationError';
@@ -122,6 +144,12 @@ export function parseGatewayConfig(
     if (prefixes.has(route.prefix)) {
       throw new GatewayConfigurationError(
         `${sourceName}: duplicate route prefix "${route.prefix}"`,
+      );
+    }
+
+    if (route.websocket === true && route.auth.mode === 'required') {
+      throw new GatewayConfigurationError(
+        `${sourceName}: route "${route.id}" cannot require authentication when websocket is enabled`,
       );
     }
 

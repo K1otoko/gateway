@@ -14,6 +14,9 @@ routes:
     upstream: http://127.0.0.1:4000/
     rewritePrefix: /users
     timeoutMs: 5000
+    auth:
+      mode: required
+      minRole: user
 `);
 
     expect(config.routes).toEqual([
@@ -23,6 +26,10 @@ routes:
         upstream: 'http://127.0.0.1:4000',
         rewritePrefix: '/users',
         timeoutMs: 5000,
+        auth: {
+          mode: 'required',
+          minRole: 'user',
+        },
       },
     ]);
   });
@@ -34,9 +41,13 @@ routes:
   - id: users
     prefix: /api
     upstream: http://127.0.0.1:4000
+    auth:
+      mode: public
   - id: orders
     prefix: /api
     upstream: http://127.0.0.1:5000
+    auth:
+      mode: public
 `),
     ).toThrowError(GatewayConfigurationError);
   });
@@ -48,7 +59,35 @@ routes:
   - id: users
     prefix: /api
     upstream: http://127.0.0.1:4000/internal
+    auth:
+      mode: public
 `),
     ).toThrow('use rewritePrefix for paths');
+  });
+
+  it('requires every route to declare an authentication policy', () => {
+    expect(() =>
+      parseGatewayConfig(`
+routes:
+  - id: users
+    prefix: /api
+    upstream: http://127.0.0.1:4000
+`),
+    ).toThrowError(GatewayConfigurationError);
+  });
+
+  it('rejects authenticated websocket routes', () => {
+    expect(() =>
+      parseGatewayConfig(`
+routes:
+  - id: events
+    prefix: /events
+    upstream: http://127.0.0.1:4000
+    websocket: true
+    auth:
+      mode: required
+      minRole: user
+`),
+    ).toThrow('cannot require authentication when websocket is enabled');
   });
 });

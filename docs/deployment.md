@@ -79,6 +79,11 @@ TRUST_PROXY=true
 
 ROUTES_CONFIG_PATH=./config/routes.yaml
 GATEWAY_NETWORK=gateway
+
+OIDC_ISSUER=https://example.com/api/sso/oidc
+OIDC_JWKS_URI=http://host.docker.internal:4000/api/sso/oidc/jwks
+OIDC_AUDIENCE=urn:sso:api
+AUTH_CLOCK_TOLERANCE_SECONDS=60
 ```
 
 也可以先从仓库复制模板：
@@ -98,6 +103,10 @@ scp deploy/.env.example deploy@YOUR_SERVER:/project/gateway/.env
 | `TRUST_PROXY` | `true` | 是否信任代理转发头 |
 | `ROUTES_CONFIG_PATH` | `./config/routes.yaml` | 生产路由文件路径 |
 | `GATEWAY_NETWORK` | `gateway` | Docker 网络名称 |
+| `OIDC_ISSUER` | SSO 对外 issuer | 必须与 access token 的 `iss` 完全一致 |
+| `OIDC_JWKS_URI` | SSO 内网 JWKS 地址 | Gateway 拉取 ES256 验签公钥的地址 |
+| `OIDC_AUDIENCE` | `urn:sso:api` | access token 必须包含的 audience |
+| `AUTH_CLOCK_TOLERANCE_SECONDS` | `60` | JWT 时钟偏移容忍秒数 |
 
 当端口直接暴露到公网时，应将 `TRUST_PROXY` 设置为 `false`。只有请求必然经过可信 Nginx、Caddy 或负载均衡器时才设置为 `true`。
 
@@ -110,10 +119,13 @@ scp deploy/.env.example deploy@YOUR_SERVER:/project/gateway/.env
 ```yaml
 routes:
   - id: user-service
-    prefix: /api/users
+    prefix: /api/gateway/users
     upstream: http://host.docker.internal:4000
     rewritePrefix: /users
     timeoutMs: 5000
+    auth:
+      mode: required
+      minRole: user
     rateLimit:
       max: 100
       timeWindow: 60000
@@ -159,6 +171,8 @@ upstream: http://10.0.1.20:4000
 ```
 
 上游 URL 只能包含协议、主机和端口，不能包含路径或认证信息。路径转换应使用 `rewritePrefix`。
+每条路由必须显式配置 `auth`。公开路由使用 `auth: { mode: public }`；
+受保护路由使用 `mode: required` 并配置 `minRole`（`user`、`admin` 或 `super`）。
 
 修改路由后执行：
 

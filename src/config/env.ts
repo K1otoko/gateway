@@ -9,6 +9,10 @@ export interface AppConfig {
   BODY_LIMIT: number;
   TRUST_PROXY: boolean;
   ROUTES_CONFIG_FILE: string;
+  OIDC_ISSUER: string;
+  OIDC_JWKS_URI: string;
+  OIDC_AUDIENCE: string;
+  AUTH_CLOCK_TOLERANCE_SECONDS: number;
 }
 
 declare module 'fastify' {
@@ -52,6 +56,27 @@ const envSchema = {
       type: 'string',
       minLength: 1,
       default: 'config/routes.yaml',
+    },
+    OIDC_ISSUER: {
+      type: 'string',
+      minLength: 1,
+      default: 'http://127.0.0.1:4000/api/sso/oidc',
+    },
+    OIDC_JWKS_URI: {
+      type: 'string',
+      minLength: 1,
+      default: 'http://127.0.0.1:4000/api/sso/oidc/jwks',
+    },
+    OIDC_AUDIENCE: {
+      type: 'string',
+      minLength: 1,
+      default: 'urn:sso:api',
+    },
+    AUTH_CLOCK_TOLERANCE_SECONDS: {
+      type: 'integer',
+      minimum: 0,
+      maximum: 300,
+      default: 60,
     },
   },
 } as const;

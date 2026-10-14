@@ -33,8 +33,22 @@ export function buildUpstreamHeaders(
   headers: ProxyHeaders,
   upstream: string,
 ): ProxyHeaders {
+  const sanitizedHeaders = Object.fromEntries(
+    Object.entries(headers).filter(
+      ([name]) => !name.toLowerCase().startsWith('x-user-'),
+    ),
+  );
+  const identityHeaders =
+    request.authenticatedUser === null
+      ? {}
+      : {
+          'x-user-id': request.authenticatedUser.id,
+          'x-user-role': request.authenticatedUser.role,
+        };
+
   return {
-    ...headers,
+    ...sanitizedHeaders,
+    ...identityHeaders,
     host: new URL(upstream).host,
     'x-forwarded-for': request.ip,
     'x-forwarded-host': request.headers.host,
