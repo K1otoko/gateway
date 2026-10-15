@@ -11,6 +11,7 @@ import type {
   AccessTokenVerifier,
   AuthenticatedUser,
 } from './token-verifier.js';
+import { AccessTokenVerificationUnavailableError } from './token-verifier.js';
 
 declare module 'fastify' {
   interface FastifyRequest {
@@ -27,6 +28,18 @@ function rejectInvalidToken(reply: FastifyReply, requestId: string) {
 
   return reply.code(401).send({
     error: 'invalid_token',
+    requestId,
+  });
+}
+
+function rejectUnavailableAuthentication(
+  reply: FastifyReply,
+  requestId: string,
+) {
+  reply.header('retry-after', '5');
+
+  return reply.code(503).send({
+    error: 'authentication_unavailable',
     requestId,
   });
 }
@@ -67,6 +80,14 @@ export function createAuthorizationHook(
     try {
       authenticatedUser = await verifyAccessToken(token);
     } catch (error) {
+      if (error instanceof AccessTokenVerificationUnavailableError) {
+        request.log.error(
+          { err: error, routeId },
+          'access token verification unavailable',
+        );
+        return rejectUnavailableAuthentication(reply, request.id);
+      }
+
       const errorCode =
         typeof error === 'object' &&
         error !== null &&

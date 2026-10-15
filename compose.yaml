@@ -48,7 +48,11 @@ services:
         max-file: "3"
     networks:
       - gateway
+      - sso
 
 networks:
   gateway:
     name: "${GATEWAY_NETWORK:-gateway}"
+  sso:
+    external: true
+    name: "${SSO_NETWORK:-sso}"

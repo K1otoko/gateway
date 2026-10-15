@@ -17,14 +17,16 @@ pnpm dev
 
 The default configuration exposes:
 
+- `GET /api/gateway/ping` for frontend-to-gateway connectivity checks
 - `GET /health/live` for liveness
 - `GET /health/ready` for readiness
 - authenticated `/api/gateway/example/*` requests proxied to
   `http://127.0.0.1:4000/*`
 
 The example upstream and SSO server do not need to be running for the gateway
-to start. The gateway fetches signing keys when the first authenticated request
-arrives.
+to start. When protected routes exist, the gateway preloads and validates the
+SSO ES256 signing keys. If that fails, public routes remain available while
+`/health/ready` and protected requests return `503` until key loading recovers.
 
 ## Authentication
 
@@ -34,8 +36,9 @@ Protected routes accept the SSO access token as
 It then removes all client-supplied `X-User-*` headers and injects trusted
 `X-User-Id` and `X-User-Role` headers for the upstream.
 
-Authorization failures return `401 invalid_token`; valid users below a route's
-minimum role return `403 insufficient_role`. Role levels are
+Invalid tokens return `401 invalid_token`; valid users below a route's minimum
+role return `403 insufficient_role`. A JWKS network, timeout, or configuration
+failure returns `503 authentication_unavailable`. Role levels are
 `super > admin > user`.
 
 ## Route configuration
@@ -82,7 +85,7 @@ not protect upgrade requests.
 | `PORT` | `3000` | Listen port |
 | `LOG_LEVEL` | `info` | Pino log level |
 | `BODY_LIMIT` | `1048576` | Maximum request body size in bytes |
-| `TRUST_PROXY` | `false` | Trust incoming proxy headers |
+| `TRUST_PROXY` | `false` | `false`, `true`, trusted hop count, or trusted IP/CIDR list |
 | `ROUTES_CONFIG_FILE` | `config/routes.yaml` | Route configuration path |
 | `OIDC_ISSUER` | `http://127.0.0.1:4000/api/sso/oidc` | Exact access token issuer |
 | `OIDC_JWKS_URI` | `{local issuer}/jwks` | JWKS URL; may use an internal address |
@@ -90,8 +93,10 @@ not protect upgrade requests.
 | `AUTH_CLOCK_TOLERANCE_SECONDS` | `60` | JWT clock skew tolerance, from 0 to 300 |
 
 Enable `TRUST_PROXY` only when the gateway is behind a trusted reverse proxy.
-In production, set `OIDC_ISSUER` to the public issuer in the token and use
-`OIDC_JWKS_URI` for the reachable internal JWKS endpoint.
+Prefer an IP/CIDR value such as `127.0.0.1` over `true` or a hop count, because
+it validates the directly connected proxy. In production, set `OIDC_ISSUER` to
+the public issuer in the token and use `OIDC_JWKS_URI` for the reachable
+internal JWKS endpoint.
 
 ## Commands
 

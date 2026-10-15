@@ -10,7 +10,10 @@ import {
   createRemoteAccessTokenVerifier,
   type AccessTokenVerifier,
 } from './auth/token-verifier.js';
-import { registerEnvironment } from './config/env.js';
+import {
+  parseTrustProxy,
+  registerEnvironment,
+} from './config/env.js';
 import {
   loadGatewayConfig,
   type GatewayConfig,
@@ -19,7 +22,10 @@ import { registerErrorHandlers } from './gateway/errors.js';
 import { generateRequestId } from './gateway/headers.js';
 import { registerProxies } from './gateway/register-proxies.js';
 import { registerSecurityPlugins } from './plugins/security.js';
-import { registerHealthRoutes } from './routes/health.js';
+import {
+  registerHealthRoutes,
+  type HealthReadiness,
+} from './routes/health.js';
 
 export interface BuildAppOptions {
   accessTokenVerifier?: AccessTokenVerifier;
@@ -63,7 +69,7 @@ export async function buildApp(
     bodyLimit: parsePositiveInteger(process.env.BODY_LIMIT, 1_048_576),
     genReqId: generateRequestId,
     logger: options.logger ?? createLoggerOptions(),
-    trustProxy: process.env.TRUST_PROXY === 'true',
+    trustProxy: parseTrustProxy(process.env.TRUST_PROXY),
   });
 
   registerErrorHandlers(app);
@@ -75,11 +81,23 @@ export async function buildApp(
   const hasProtectedRoutes = gatewayConfig.routes.some(
     (route) => route.auth.mode === 'required',
   );
-  const accessTokenVerifier =
-    options.accessTokenVerifier ??
-    (hasProtectedRoutes
-      ? createRemoteAccessTokenVerifier(app.config)
-      : undefined);
+  let accessTokenVerifier = options.accessTokenVerifier;
+  let healthReadiness: HealthReadiness | undefined;
+
+  if (accessTokenVerifier === undefined && hasProtectedRoutes) {
+    const remoteVerifier = createRemoteAccessTokenVerifier(app.config);
+
+    try {
+      await remoteVerifier.preload();
+    } catch (error) {
+      app.log.error({ err: error }, 'OIDC signing keys are not ready');
+    }
+
+    accessTokenVerifier = remoteVerifier;
+    healthReadiness = {
+      isAuthenticationReady: () => remoteVerifier.ensureReady(),
+    };
+  }
 
   await registerSecurityPlugins(app);
   registerAuthenticationContext(app);
@@ -87,7 +105,7 @@ export async function buildApp(
     reply.header('x-request-id', request.id);
     done();
   });
-  registerHealthRoutes(app, gatewayConfig);
+  registerHealthRoutes(app, gatewayConfig, healthReadiness);
   await registerProxies(app, gatewayConfig, accessTokenVerifier);
 
   return app;

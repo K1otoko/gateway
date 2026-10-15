@@ -79,9 +79,10 @@ TRUST_PROXY=true
 
 ROUTES_CONFIG_PATH=./config/routes.yaml
 GATEWAY_NETWORK=gateway
+SSO_NETWORK=sso
 
 OIDC_ISSUER=https://example.com/api/sso/oidc
-OIDC_JWKS_URI=http://host.docker.internal:4000/api/sso/oidc/jwks
+OIDC_JWKS_URI=http://sso:4000/api/sso/oidc/jwks
 OIDC_AUDIENCE=urn:sso:api
 AUTH_CLOCK_TOLERANCE_SECONDS=60
 ```
@@ -100,15 +101,16 @@ scp deploy/.env.example deploy@YOUR_SERVER:/project/gateway/.env
 | `GATEWAY_PORT` | `3000` | 宿主机监听端口 |
 | `LOG_LEVEL` | `info` | Pino 日志级别 |
 | `BODY_LIMIT` | `1048576` | 最大请求体字节数 |
-| `TRUST_PROXY` | `true` | 是否信任代理转发头 |
+| `TRUST_PROXY` | `true` | `false`、`true`、可信跳数或可信代理 IP/CIDR 列表 |
 | `ROUTES_CONFIG_PATH` | `./config/routes.yaml` | 生产路由文件路径 |
 | `GATEWAY_NETWORK` | `gateway` | Docker 网络名称 |
+| `SSO_NETWORK` | `sso` | 已运行的 SSO Compose 网络名称 |
 | `OIDC_ISSUER` | SSO 对外 issuer | 必须与 access token 的 `iss` 完全一致 |
-| `OIDC_JWKS_URI` | SSO 内网 JWKS 地址 | Gateway 拉取 ES256 验签公钥的地址 |
+| `OIDC_JWKS_URI` | `http://sso:4000/api/sso/oidc/jwks` | Gateway 通过 SSO Docker 网络拉取 ES256 公钥 |
 | `OIDC_AUDIENCE` | `urn:sso:api` | access token 必须包含的 audience |
 | `AUTH_CLOCK_TOLERANCE_SECONDS` | `60` | JWT 时钟偏移容忍秒数 |
 
-当端口直接暴露到公网时，应将 `TRUST_PROXY` 设置为 `false`。只有请求必然经过可信 Nginx、Caddy 或负载均衡器时才设置为 `true`。
+当端口直接暴露到公网时，应将 `TRUST_PROXY` 设置为 `false`。只有请求必然经过可信 Nginx、Caddy 或负载均衡器时才启用该配置。生产环境应优先填写直接连接 Gateway 的代理 IP/CIDR；`true` 会信任所有转发头，纯跳数也无法验证直接连接方。
 
 不要把服务器的 `.env` 提交到 Git。
 
@@ -131,7 +133,9 @@ routes:
       timeWindow: 60000
 ```
 
-`upstream` 必须根据上游服务的位置配置。
+`upstream` 必须根据上游服务的位置配置。Gateway Compose 会加入现有的
+`sso` 外部网络，因此部署 Gateway 前必须先启动 SSO，并确认
+`docker network inspect sso` 成功。
 
 ### 上游运行在宿主机
 
@@ -173,6 +177,32 @@ upstream: http://10.0.1.20:4000
 上游 URL 只能包含协议、主机和端口，不能包含路径或认证信息。路径转换应使用 `rewritePrefix`。
 每条路由必须显式配置 `auth`。公开路由使用 `auth: { mode: public }`；
 受保护路由使用 `mode: required` 并配置 `minRole`（`user`、`admin` 或 `super`）。
+
+Deployment 的公网 hook 使用更具体的公开前缀，其他接口继续要求 `super`：
+
+```yaml
+routes:
+  - id: deployment-hooks
+    prefix: /api/gateway/deployment/hooks
+    upstream: http://deployment:4100
+    rewritePrefix: /api/hooks
+    timeoutMs: 5000
+    auth:
+      mode: public
+
+  - id: deployment
+    prefix: /api/gateway/deployment
+    upstream: http://deployment:4100
+    rewritePrefix: /api
+    timeoutMs: 5000
+    auth:
+      mode: required
+      minRole: super
+```
+
+Gateway 只负责公开该路径并转发请求，hook 签名校验和具体端点由 Deployment 实现。
+Deployment 容器必须加入名为 `gateway` 的外部 Docker 网络，并在该网络中使用
+`deployment` 服务名；不要依赖只绑定宿主机 `127.0.0.1:4100` 的发布端口。
 
 修改路由后执行：
 
@@ -369,10 +399,13 @@ curl --fail http://127.0.0.1:3000/health/ready
 通过公网域名检查：
 
 ```bash
-curl --fail https://gateway.example.com/health/ready
+curl --fail https://api.xpeach.top/api/gateway/ping
+curl --fail https://sso.xpeach.top/api/gateway/ping
 ```
 
-`/health/ready` 当前只确认 gateway 已启动并加载路由，不会主动检查每个上游服务是否可用。
+`/health/ready` 确认 gateway 已加载路由；存在受保护路由时，还要求 JWKS 已成功加载且包含可用的 ES256 签名公钥。它不会主动检查每个业务上游是否可用。
+`/api/gateway/ping` 是公开的链路探针，用于确认请求已经经过现有 Nginx
+代理到达 Gateway，不检查 SSO、JWKS 或业务上游。
 
 ## 十三、回滚
 

@@ -1,5 +1,13 @@
 import fastifyEnv from '@fastify/env';
-import type { FastifyInstance } from 'fastify';
+import type {
+  FastifyInstance,
+  FastifyServerOptions,
+} from 'fastify';
+
+type TrustProxyOption = Exclude<
+  FastifyServerOptions['trustProxy'],
+  undefined
+>;
 
 export interface AppConfig {
   NODE_ENV: 'development' | 'test' | 'production';
@@ -7,7 +15,7 @@ export interface AppConfig {
   PORT: number;
   LOG_LEVEL: string;
   BODY_LIMIT: number;
-  TRUST_PROXY: boolean;
+  TRUST_PROXY: string;
   ROUTES_CONFIG_FILE: string;
   OIDC_ISSUER: string;
   OIDC_JWKS_URI: string;
@@ -49,8 +57,9 @@ const envSchema = {
       default: 1_048_576,
     },
     TRUST_PROXY: {
-      type: 'boolean',
-      default: false,
+      type: 'string',
+      minLength: 1,
+      default: 'false',
     },
     ROUTES_CONFIG_FILE: {
       type: 'string',
@@ -80,6 +89,45 @@ const envSchema = {
     },
   },
 } as const;
+
+export function parseTrustProxy(
+  value: string | undefined,
+): TrustProxyOption {
+  const normalized = (value ?? 'false').trim();
+  const keyword = normalized.toLowerCase();
+
+  if (keyword === 'false') {
+    return false;
+  }
+
+  if (keyword === 'true') {
+    return true;
+  }
+
+  if (/^-?\d+$/.test(normalized)) {
+    const trustedHops = Number(normalized);
+
+    if (!Number.isSafeInteger(trustedHops) || trustedHops < 0) {
+      throw new Error(
+        'TRUST_PROXY hop count must be a non-negative safe integer',
+      );
+    }
+
+    if (trustedHops === 0) {
+      return false;
+    }
+
+    return (_address, hop) => hop < trustedHops;
+  }
+
+  if (normalized.length === 0) {
+    throw new Error(
+      'TRUST_PROXY must be false, true, a hop count, or trusted IP/CIDR values',
+    );
+  }
+
+  return normalized;
+}
 
 export async function registerEnvironment(app: FastifyInstance): Promise<void> {
   await app.register(fastifyEnv, {

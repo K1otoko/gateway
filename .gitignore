@@ -3,6 +3,7 @@ dist/
 coverage/
 .env
 .image.env
+/config/routes.local.yaml
 .deploy-keys/
 *.log
 .DS_Store

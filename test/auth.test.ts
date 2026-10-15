@@ -6,8 +6,9 @@ import {
   generateKeyPair,
   SignJWT,
   type CryptoKey,
+  type JWK,
 } from 'jose';
-import { afterEach, beforeAll, describe, expect, it } from 'vitest';
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import type { Role } from '../src/auth/roles.js';
 import { createAccessTokenVerifier } from '../src/auth/token-verifier.js';
@@ -20,6 +21,7 @@ const USER_ID = '78a763fc-e0c1-48e2-83e8-0dc9e4b8cf5d';
 const servers: Server[] = [];
 
 let privateKey: CryptoKey;
+let publicJwk: JWK;
 let accessTokenVerifier: ReturnType<typeof createAccessTokenVerifier>;
 
 async function listen(server: Server): Promise<number> {
@@ -57,6 +59,7 @@ interface TokenOptions {
   audience?: string;
   expiresAt?: number | string;
   issuer?: string;
+  keyId?: string;
   role?: Role | 'unknown';
   signingKey?: CryptoKey;
   tokenUse?: 'service' | 'user';
@@ -71,7 +74,7 @@ async function issueToken(options: TokenOptions = {}): Promise<string> {
   })
     .setProtectedHeader({
       alg: 'ES256',
-      kid: KEY_ID,
+      kid: options.keyId ?? KEY_ID,
       typ: options.typ ?? 'at+jwt',
     })
     .setIssuer(options.issuer ?? ISSUER)
@@ -82,10 +85,28 @@ async function issueToken(options: TokenOptions = {}): Promise<string> {
     .sign(options.signingKey ?? privateKey);
 }
 
+function setEnvironment(values: Record<string, string>): () => void {
+  const previousValues = new Map(
+    Object.keys(values).map((name) => [name, process.env[name]]),
+  );
+
+  Object.assign(process.env, values);
+
+  return () => {
+    for (const [name, value] of previousValues) {
+      if (value === undefined) {
+        delete process.env[name];
+      } else {
+        process.env[name] = value;
+      }
+    }
+  };
+}
+
 beforeAll(async () => {
   const keyPair = await generateKeyPair('ES256');
   privateKey = keyPair.privateKey;
-  const publicJwk = await exportJWK(keyPair.publicKey);
+  publicJwk = await exportJWK(keyPair.publicKey);
   const localKeySet = createLocalJWKSet({
     keys: [
       {
@@ -319,6 +340,268 @@ describe('gateway authentication', () => {
       }
     } finally {
       await app.close();
+    }
+  });
+
+  it('preloads remote signing keys and keeps cached keys available', async () => {
+    let jwksRequests = 0;
+    const jwksServer = createServer((_request, response) => {
+      jwksRequests += 1;
+      response.setHeader('content-type', 'application/json');
+      response.end(
+        JSON.stringify({
+          keys: [
+            {
+              ...publicJwk,
+              alg: 'ES256',
+              kid: KEY_ID,
+              use: 'sig',
+            },
+          ],
+        }),
+      );
+    });
+    servers.push(jwksServer);
+    const jwksPort = await listen(jwksServer);
+    const upstream = createServer((_request, response) => {
+      response.end('ok');
+    });
+    servers.push(upstream);
+    const upstreamPort = await listen(upstream);
+    const restoreEnvironment = setEnvironment({
+      AUTH_CLOCK_TOLERANCE_SECONDS: '60',
+      OIDC_AUDIENCE: AUDIENCE,
+      OIDC_ISSUER: ISSUER,
+      OIDC_JWKS_URI: `http://127.0.0.1:${jwksPort}/jwks`,
+    });
+
+    try {
+      const app = await buildApp({
+        gatewayConfig: {
+          routes: [
+            {
+              id: 'remote-protected',
+              prefix: '/remote-protected',
+              upstream: `http://127.0.0.1:${upstreamPort}`,
+              auth: {
+                mode: 'required',
+                minRole: 'user',
+              },
+            },
+          ],
+        },
+        logger: false,
+      });
+
+      try {
+        const readyResponse = await app.inject({
+          method: 'GET',
+          url: '/health/ready',
+        });
+        const unknownKeyResponse = await app.inject({
+          method: 'GET',
+          url: '/remote-protected/resource',
+          headers: {
+            authorization: `Bearer ${await issueToken({
+              keyId: 'unknown-key',
+            })}`,
+          },
+        });
+
+        expect(jwksRequests).toBe(1);
+        expect(readyResponse.statusCode).toBe(200);
+        expect(unknownKeyResponse.statusCode).toBe(401);
+
+        await close(jwksServer);
+        servers.splice(servers.indexOf(jwksServer), 1);
+
+        const cachedKeyResponse = await app.inject({
+          method: 'GET',
+          url: '/remote-protected/resource',
+          headers: {
+            authorization: `Bearer ${await issueToken()}`,
+          },
+        });
+
+        expect(cachedKeyResponse.statusCode).toBe(200);
+        expect(cachedKeyResponse.body).toBe('ok');
+        expect(jwksRequests).toBe(1);
+      } finally {
+        await app.close();
+      }
+    } finally {
+      restoreEnvironment();
+    }
+  });
+
+  it('reports not ready and returns 503 when JWKS cannot be reached', async () => {
+    const unavailableJwks = createServer();
+    servers.push(unavailableJwks);
+    const jwksPort = await listen(unavailableJwks);
+    await close(unavailableJwks);
+    servers.splice(servers.indexOf(unavailableJwks), 1);
+
+    let upstreamRequests = 0;
+    const upstream = createServer((_request, response) => {
+      upstreamRequests += 1;
+      response.end('unexpected');
+    });
+    servers.push(upstream);
+    const upstreamPort = await listen(upstream);
+    const restoreEnvironment = setEnvironment({
+      AUTH_CLOCK_TOLERANCE_SECONDS: '60',
+      OIDC_AUDIENCE: AUDIENCE,
+      OIDC_ISSUER: ISSUER,
+      OIDC_JWKS_URI: `http://127.0.0.1:${jwksPort}/jwks`,
+    });
+
+    try {
+      const app = await buildApp({
+        gatewayConfig: {
+          routes: [
+            {
+              id: 'unavailable-auth',
+              prefix: '/unavailable-auth',
+              upstream: `http://127.0.0.1:${upstreamPort}`,
+              auth: {
+                mode: 'required',
+                minRole: 'user',
+              },
+            },
+          ],
+        },
+        logger: false,
+      });
+
+      try {
+        const readyResponse = await app.inject({
+          method: 'GET',
+          url: '/health/ready',
+        });
+        const protectedResponse = await app.inject({
+          method: 'GET',
+          url: '/unavailable-auth/resource',
+          headers: {
+            authorization: `Bearer ${await issueToken()}`,
+          },
+        });
+
+        expect(readyResponse.statusCode).toBe(503);
+        expect(readyResponse.json()).toMatchObject({
+          status: 'not_ready',
+        });
+        expect(protectedResponse.statusCode).toBe(503);
+        expect(protectedResponse.headers['retry-after']).toBe('5');
+        expect(protectedResponse.json()).toMatchObject({
+          error: 'authentication_unavailable',
+        });
+        expect(upstreamRequests).toBe(0);
+      } finally {
+        await app.close();
+      }
+    } finally {
+      restoreEnvironment();
+    }
+  });
+
+  it('recovers readiness after JWKS gains an ES256 signing public key', async () => {
+    let hasSigningKey = false;
+    const jwksServer = createServer((_request, response) => {
+      response.setHeader('content-type', 'application/json');
+      response.end(
+        JSON.stringify({
+          keys: hasSigningKey
+            ? [
+                {
+                  ...publicJwk,
+                  alg: 'ES256',
+                  kid: KEY_ID,
+                  use: 'sig',
+                },
+              ]
+            : [],
+        }),
+      );
+    });
+    servers.push(jwksServer);
+    const jwksPort = await listen(jwksServer);
+    const upstream = createServer((_request, response) => {
+      response.end('ok');
+    });
+    servers.push(upstream);
+    const upstreamPort = await listen(upstream);
+    const restoreEnvironment = setEnvironment({
+      AUTH_CLOCK_TOLERANCE_SECONDS: '60',
+      OIDC_AUDIENCE: AUDIENCE,
+      OIDC_ISSUER: ISSUER,
+      OIDC_JWKS_URI: `http://127.0.0.1:${jwksPort}/jwks`,
+    });
+    let currentTime = Date.now();
+    const dateNow = vi
+      .spyOn(Date, 'now')
+      .mockImplementation(() => currentTime);
+
+    try {
+      const app = await buildApp({
+        gatewayConfig: {
+          routes: [
+            {
+              id: 'invalid-jwks',
+              prefix: '/invalid-jwks',
+              upstream: `http://127.0.0.1:${upstreamPort}`,
+              auth: {
+                mode: 'required',
+                minRole: 'user',
+              },
+            },
+          ],
+        },
+        logger: false,
+      });
+
+      try {
+        const readyResponse = await app.inject({
+          method: 'GET',
+          url: '/health/ready',
+        });
+        const protectedResponse = await app.inject({
+          method: 'GET',
+          url: '/invalid-jwks/resource',
+          headers: {
+            authorization: `Bearer ${await issueToken()}`,
+          },
+        });
+
+        expect(readyResponse.statusCode).toBe(503);
+        expect(protectedResponse.statusCode).toBe(503);
+        expect(protectedResponse.json()).toMatchObject({
+          error: 'authentication_unavailable',
+        });
+
+        hasSigningKey = true;
+        currentTime += 5_001;
+
+        const recoveredReadyResponse = await app.inject({
+          method: 'GET',
+          url: '/health/ready',
+        });
+        const recoveredProtectedResponse = await app.inject({
+          method: 'GET',
+          url: '/invalid-jwks/resource',
+          headers: {
+            authorization: `Bearer ${await issueToken()}`,
+          },
+        });
+
+        expect(recoveredReadyResponse.statusCode).toBe(200);
+        expect(recoveredProtectedResponse.statusCode).toBe(200);
+        expect(recoveredProtectedResponse.body).toBe('ok');
+      } finally {
+        await app.close();
+      }
+    } finally {
+      dateNow.mockRestore();
+      restoreEnvironment();
     }
   });
 

@@ -49,9 +49,9 @@ export async function registerProxies(
       upstream: route.upstream,
       prefix: route.prefix,
       rewritePrefix: route.rewritePrefix ?? '',
-      timeout: route.timeoutMs ?? DEFAULT_UPSTREAM_TIMEOUT_MS,
       config: routeConfig,
       replyOptions: {
+        timeout: route.timeoutMs ?? DEFAULT_UPSTREAM_TIMEOUT_MS,
         rewriteRequestHeaders: (
           request: ProxyRequest,
           headers: ProxyHeaders,

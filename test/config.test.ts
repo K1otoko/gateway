@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
+import { parseTrustProxy } from '../src/config/env.js';
 import {
   GatewayConfigurationError,
   parseGatewayConfig,
@@ -89,5 +90,36 @@ routes:
       minRole: user
 `),
     ).toThrow('cannot require authentication when websocket is enabled');
+  });
+});
+
+describe('parseTrustProxy', () => {
+  it('parses boolean and trusted address values', () => {
+    expect(parseTrustProxy(undefined)).toBe(false);
+    expect(parseTrustProxy('false')).toBe(false);
+    expect(parseTrustProxy('TRUE')).toBe(true);
+    expect(parseTrustProxy('127.0.0.1, 10.0.0.0/8')).toBe(
+      '127.0.0.1, 10.0.0.0/8',
+    );
+  });
+
+  it('parses a non-negative trusted hop count', () => {
+    expect(parseTrustProxy('0')).toBe(false);
+
+    const trustTwoHops = parseTrustProxy('2');
+
+    expect(trustTwoHops).toBeTypeOf('function');
+
+    if (typeof trustTwoHops === 'function') {
+      expect(trustTwoHops('127.0.0.1', 0)).toBe(true);
+      expect(trustTwoHops('10.0.0.1', 1)).toBe(true);
+      expect(trustTwoHops('203.0.113.1', 2)).toBe(false);
+    }
+  });
+
+  it('rejects an invalid trusted hop count', () => {
+    expect(() => parseTrustProxy('-1')).toThrow(
+      'TRUST_PROXY hop count must be a non-negative safe integer',
+    );
   });
 });
